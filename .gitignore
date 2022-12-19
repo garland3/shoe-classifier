@@ -7,6 +7,8 @@ wandb
 *.csv
 *.zip
 src/explore/shoe-classifier/
+src/explore/WGAN/
+
 
 
 # Byte-compiled / optimized / DLL files
