@@ -231,6 +231,7 @@ class WGAN(pl.LightningModule):
                 critic_real = self.critic(real)
                 critic_fake = self.critic(fake.detach())
                 # use the wgans loss function
+                # Do I need a negative sign here?
                 crit_loss = (torch.mean(critic_real) - torch.mean(critic_fake))
                 # clip the weights of the critic
                 for p in self.critic.parameters():
