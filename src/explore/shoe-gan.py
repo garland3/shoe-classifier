@@ -155,10 +155,11 @@ gen.test_with_random_noise().shape
 import pytorch_lightning as pl
 import torch
 class WGAN(pl.LightningModule):
-    def __init__(self, critic = None, generator = None, lr=2e-4, b1=0.5, b2=0.999,
+    def __init__(self, critic = None, generator = None, lr=1e-3, b1=0.5, b2=0.999,
                  batch_size=64, z_dim=100, in_channels=3,
                  data_mean = None, 
                  data_std = None,
+                 gradient_penalty_weight=10,
                  **kwargs):
         super().__init__()
         self.save_hyperparameters()
@@ -209,9 +210,9 @@ class WGAN(pl.LightningModule):
             fake = self(z)
             # pass images through critic
             if verbose: print("fake shape and device: ", fake.shape, fake.device)
-            critic_pred = self.critic(fake)
+            critic_pred_of_fakes = self.critic(fake)
             # calculate generator loss
-            gen_loss = -torch.mean(critic_pred)
+            gen_loss = -torch.mean(critic_pred_of_fakes)
             self.log('gen_loss', gen_loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
             return gen_loss
         # train critic
@@ -228,19 +229,38 @@ class WGAN(pl.LightningModule):
                 z = torch.randn(batch_size, self.hparams.z_dim, 1, 1).to(real.device)
                 fake = self(z)
                 # score both the real and fake images
-                critic_real = self.critic(real)
-                critic_fake = self.critic(fake.detach())
+                critic_pred_of_real = self.critic(real)
+                critic_pred_of_fakes = self.critic(fake.detach())
                 # use the wgans loss function
                 # Do I need a negative sign here?
-                crit_loss = (torch.mean(critic_real) - torch.mean(critic_fake))
-                # clip the weights of the critic
-                for p in self.critic.parameters():
-                    p.data.clamp_(-0.01, 0.01)
+                crit_loss =  torch.mean(critic_pred_of_fakes)- torch.mean(critic_pred_of_real) 
+                # add a gradient penalty using automatic differentiation
+                # get the gradient of the critic's prediction of the real images
+                # with respect to the real images
+                gradient_penalty = self.gradient_penalty(real, critic_pred_of_real)
+                # add the gradient penalty to the critic loss
+                crit_loss += gradient_penalty * self.hparams.gradient_penalty_weight
+                
                 # optimize
                 self.log('crit_loss', crit_loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
                 if j == n_steps - 1:
                     return {"loss": crit_loss} #  py lightning will call backward() and optimizer.step() for us
                 self.crit_opt.step()
+    def gradient_penalty(self, real, critic_pred_of_real):
+        # get the gradient of the critic's prediction of the real images
+        # with respect to the real images
+        batch_size = real.shape[0]
+        gradient = torch.autograd.grad(
+            outputs=critic_pred_of_real,
+            inputs=real,
+            grad_outputs=torch.ones_like(critic_pred_of_real),
+            create_graph=True,
+            retain_graph=True,
+        )[0]
+        gradient = gradient.view(batch_size, -1)
+        gradient_norm = gradient.norm(2, dim=1)
+        gradient_penalty = torch.mean((gradient_norm - 1) ** 2)
+        return gradient_penalty
                 
     
     # plot some images
@@ -264,7 +284,7 @@ class WGAN(pl.LightningModule):
             if use_plt:
                 fig, ax = plt.subplots(1, 2, figsize=(10, 5))
                 ax[0].imshow(grid_genereated.permute(1, 2, 0))
-                ax[0].set_title('Generated Images')
+                ax[0].set_title('Generated Images. Step: ' + str(self.gen_steps))
                 ax[1].imshow(grid_real.permute(1, 2, 0))
                 ax[1].set_title('Real Images')
                 if do_log:
@@ -295,7 +315,9 @@ csv_file = Path('../../Shoes_Dataset/shoes.csv')
 if csv_file.exists():
     print("ipython")
 else:
-    csv_file = Path("/Shoes_Dataset/shoes.csv")
+    # 1st print the current working directory
+    print(os.getcwd())
+    csv_file = Path("./Shoes_Dataset/shoes.csv")
     print("script")
     
 df = pd.read_csv(csv_file)
@@ -328,6 +350,6 @@ else:
     from pytorch_lightning.loggers import TensorBoardLogger
     logger = TensorBoardLogger('lightning_logs', name='WGAN')
 
-trainer = pl.Trainer(max_epochs=100, gpus=1, logger=logger)
+trainer = pl.Trainer(max_epochs=2000, gpus=1, logger=logger)
 trainer.fit(model, dm)
 # %%
